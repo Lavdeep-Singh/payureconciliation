@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update CSV File</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-group input[type="file"],
+        .form-group input[type="text"],
+        .form-group button {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+        }
+        .form-group button {
+            background-color: #28a745;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+        }
+        .form-group button:disabled {
+            background-color: #ccc;
+        }
+        .processing-message {
+            display: none;
+            margin-top: 15px;
+            color: blue;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Upload CSV File</h2>
+        <div class="form-group">
+            <label for="fileInput">Select CSV file:</label>
+            <input type="file" id="fileInput" accept=".csv">
+        </div>
+        <div class="form-group">
+            <label for="phoneNumberInput">Enter Phone Number:</label>
+            <input type="text" id="phoneNumberInput" placeholder="Enter your phone number">
+        </div>
+        <div class="form-group">
+            <button id="getTokenButton">Get OTP</button>
+        </div>
+        <div class="form-group">
+            <button id="processButton" disabled>Process File</button>
+        </div>
+        <div class="processing-message" id="processingMessage">Processing, please wait...</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script>
+document.addEventListener('DOMContentLoaded', () => {
+    const fileInput = document.getElementById('fileInput');
+    const phoneNumberInput = document.getElementById('phoneNumberInput');
+    const getTokenButton = document.getElementById('getTokenButton');
+    const processButton = document.getElementById('processButton');
+    const processingMessage = document.getElementById('processingMessage');
+
+    let file;
+    let sessionId;
+
+    getTokenButton.disabled = true;
+
+    fileInput.addEventListener('change', (event) => {
+        file = event.target.files[0];
+        updateButtonStates();
+    });
+
+    phoneNumberInput.addEventListener('input', () => {
+        updateButtonStates();
+    });
+
+    getTokenButton.addEventListener('click', async () => {
+        const phoneNumber = phoneNumberInput.value.trim();
+
+        const loginData = {
+            phoneNumber: phoneNumber,
+            authVerificationType: 'otp',
+            device: {
+                id: 'wSrnMjBIn8gSwDDM1HTC6',
+                details: {
+                    screenSize: '600 X 993',
+                    storageAccess: true
+                },
+                platformVersion: '125',
+                platform: 'Chrome',
+                type: 'Desktop'
+            },
+            countryCode: '+91',
+            source: 'https://www.livelinen.com',
+            hashCode: null,
+            merchantParams: null
+        };
+
+        try {
+            const loginResponse = await axios.post('https://api.breeze.in/session/login', loginData);
+            const otpSessionToken = loginResponse.data.otpSessionToken;
+
+            const otp = prompt('Please enter the OTP sent to your phone number:');
+            if (!otp) return;
+
+            showProcessingMessage(true);
+
+            const verifyData = {
+                otp: otp,
+                checkoutId: 'PrTi9PKUUdY9LBhLaoEw8',
+                otpSessionToken: otpSessionToken,
+                ingestFromExternalSources: true,
+                enableNotifications: true,
+                userMarketingConsent: true,
+                merchantParams: null
+            };
+
+            const verifyResponse = await axios.post('https://api.breeze.in/otp/verify', verifyData);
+            sessionId = verifyResponse.data.sessionInfo[0].token;
+
+            showProcessingMessage(false);
+            enableProcessButton();
+
+            // Disable getTokenButton after the token is received
+            getTokenButton.disabled = true;
+        } catch (error) {
+            showProcessingMessage(false);
+            console.error('Error:', error);
+            alert('Error occurred while getting the token. Please try again later.');
+        }
+    });
+
+    processButton.addEventListener('click', async () => {
+        const token = sessionId;
+
+        if (!token || !file) {
+            alert('Please fill all the fields and select a file.');
+            return;
+        }
+
+        showProcessingMessage(true);
+
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        const updatedData = await processCsvData(json, token);
+
+        const newSheet = XLSX.utils.aoa_to_sheet(updatedData);
+        const newWorkbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(newWorkbook, newSheet, sheetName);
+        const newCsv = XLSX.write(newWorkbook, { bookType: 'csv', type: 'array' });
+        const blob = new Blob([newCsv], { type: 'text/csv;charset=utf-8;' });
+
+        showProcessingMessage(false);
+        saveAs(blob, 'updated_livelinen.csv');
+    });
+
+    function updateButtonStates() {
+        getTokenButton.disabled = !phoneNumberInput.value.trim() || !file;
+    }
+
+    function enableProcessButton() {
+        processButton.disabled = false;
+    }
+
+    function showProcessingMessage(show) {
+        processingMessage.style.display = show ? 'block' : 'none';
+    }
+
+    async function processCsvData(data, token) {
+        const header = data[0];
+        const noteAttributesIndex = header.indexOf('Note Attributes');
+
+        if (noteAttributesIndex === -1) {
+            alert('Note Attributes column not found in CSV.');
+            showProcessingMessage(false);
+            return data;
+        }
+
+        for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            const noteAttributes = row[noteAttributesIndex];
+            if (noteAttributes) {
+                const breezeOrderId = extractBreezeOrderId(noteAttributes);
+                if (breezeOrderId) {
+                    const platformOrderId = await getOrder(breezeOrderId, token);
+                    if (platformOrderId) {
+                        console.log('appending platformOrdeId', platformOrderId);
+                        row[noteAttributesIndex] = noteAttributes + ` \nplatformOrderId: ${platformOrderId}`;
+                    }
+                }
+            }
+        }
+        return data;
+    }
+
+    function extractBreezeOrderId(noteAttributes) {
+        const match = noteAttributes.match(/Breeze Order Id: (\w+)/);
+        return match ? match[1] : null;
+    }
+
+    async function getOrder(breezeOrderId, token) {
+        const url = `https://api.breeze.in/order/${breezeOrderId}`;
+        const headers = {
+            'Authorization': `Bearer ${token}`,
+            'x-session-id': sessionId,
+        };
+
+        try {
+            const response = await axios.get(url, { headers });
+            if (response.status === 200 && response.data.platformOrderId) {
+                return response.data.platformOrderId;
+            } else {
+                console.error(`Error fetching details for Breeze Order Id ${breezeOrderId}: ${response.status}, Response: ${response.data}`);
+                return null;
+            }
+        } catch (error) {
+            console.error(`Error fetching details for Breeze Order Id ${breezeOrderId}:`, error);
+            return null;
+        }
+    }
+});
+    </script>
+</body>
+</html>
